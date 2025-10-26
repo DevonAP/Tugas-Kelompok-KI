@@ -1,7 +1,13 @@
 #include <iostream>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <cstring>
 #include <vector>
-#include <string>
 #include <bitset>
+#include <cstdint>
+#include <errno.h>
 
 using namespace std;
 
@@ -210,11 +216,11 @@ vector<int> des_decrypt_block(const vector<int>& block64, const vector< vector<i
 }
 
 // =========================
-// 6️⃣ Helper (Text <-> Bits)
+// 6️⃣ Helper (Text <-> Bits) and Bits<->Bytes
 // =========================
 vector<int> text_to_bits(const string& text) {
     vector<int> bits;
-    for (char c : text) {
+    for (unsigned char c : text) {
         bitset<8> b(c);
         for (int i = 7; i >= 0; --i) bits.push_back(b[i]);
     }
@@ -233,8 +239,32 @@ string bits_to_text(const vector<int>& bits) {
     return text;
 }
 
+vector<uint8_t> bits_to_bytes(const vector<int>& bits) {
+    vector<uint8_t> bytes;
+    size_t n = bits.size();
+    if (n % 8 != 0) return bytes; // harus kelipatan 8
+    for (size_t i = 0; i < n; i += 8) {
+        int val = 0;
+        for (int j = 0; j < 8; ++j) {
+            val = (val << 1) | bits[i + j];
+        }
+        bytes.push_back(static_cast<uint8_t>(val));
+    }
+    return bytes;
+}
+
+vector<int> bytes_to_bits(const vector<uint8_t>& bytes) {
+    vector<int> bits;
+    for (uint8_t b : bytes) {
+        for (int i = 7; i >= 0; --i) {
+            bits.push_back((b >> i) & 1);
+        }
+    }
+    return bits;
+}
+
 // =========================
-// 7️⃣ Main DES Encrypt/Decrypt
+// 7️⃣ Main DES Encrypt/Decrypt (operasi pada string <-> bits -> bytes untuk kirim)
 // =========================
 vector<int> des_encrypt(const string& plaintext, const string& keytext) {
     vector<int> keybits = text_to_bits(keytext.substr(0,8));
@@ -263,6 +293,75 @@ string des_decrypt(const vector<int>& cipherbits, const string& keytext) {
         plainbits.insert(plainbits.end(), decrypted.begin(), decrypted.end());
     }
     string plaintext = bits_to_text(plainbits);
-    int pad_len = int(plaintext.back());
+    if (plaintext.empty()) return string();
+    int pad_len = int((unsigned char)plaintext.back());
+    if (pad_len <= 0 || pad_len > 8) return plaintext; // fallback safety
     return plaintext.substr(0, plaintext.size()-pad_len);
+}
+
+int main() {
+    int sock = 0;
+    struct sockaddr_in serverAddr;
+    const string key = "81384935"; // Kunci DES 8 karakter
+
+    // 1️⃣ Buat socket
+    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror("Socket gagal dibuat");
+        return -1;
+    }
+
+    // 2️⃣ Siapkan alamat server (pastikan IP benar dan reachable)
+    const char* server_ip = "192.168.137.1"; // ubah sesuai IP laptop/server kamu
+    memset(&serverAddr, 0, sizeof(serverAddr));
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(9999);
+
+    if (inet_pton(AF_INET, server_ip, &serverAddr.sin_addr) <= 0) {
+        perror("IP tidak valid");
+        close(sock);
+        return -1;
+    }
+
+    // 3️⃣ Coba koneksi ke server
+    if (connect(sock, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
+        perror("Koneksi gagal");
+        close(sock);
+        return -1;
+    }
+
+    cout << "Terhubung ke server.\n";
+
+    // 4️⃣ Enkripsi pesan
+    const char* msg = "HI TEMAN";
+    vector<int> encrypted_bits = des_encrypt(string(msg), key);
+    vector<uint8_t> encrypted_bytes = bits_to_bytes(encrypted_bits);
+
+    // 5️⃣ Kirim ke server
+    ssize_t sent = send(sock, encrypted_bytes.data(), encrypted_bytes.size(), 0);
+    if (sent < 0) {
+        perror("Gagal mengirim");
+        close(sock);
+        return -1;
+    }
+    cout << "Terkirim " << sent << " byte terenkripsi.\n";
+
+    // 6️⃣ Terima balasan dari server
+    vector<uint8_t> recvbuf(4096);
+    ssize_t received = recv(sock, recvbuf.data(), recvbuf.size(), 0);
+    if (received < 0) {
+        perror("Gagal menerima");
+        close(sock);
+        return -1;
+    }
+    recvbuf.resize(received);
+    cout << "Menerima " << received << " byte dari server.\n";
+
+    // 7️⃣ Dekripsi balasan
+    vector<int> recv_bits = bytes_to_bits(recvbuf);
+    string decrypted = des_decrypt(recv_bits, key);
+    cout << "Balasan server (setelah dekripsi): " << decrypted << endl;
+
+    // 8️⃣ Tutup koneksi
+    close(sock);
+    return 0;
 }
