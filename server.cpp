@@ -21,6 +21,15 @@ vector<uint8_t> bits_to_bytes(const vector<int>& bits) {
     return bytes;
 }
 
+vector<int> bytes_to_bits(const vector<uint8_t>& bytes) {
+    vector<int> bits;
+    for (uint8_t byte : bytes) {
+        for (int i = 7; i >= 0; --i)
+            bits.push_back((byte >> i) & 1);
+    }
+    return bits;
+}
+
 int main() {
     const string key = "81384935"; // Kunci DES 8 karakter
 
@@ -88,8 +97,13 @@ int main() {
             cout << hex << (int)buffer[i] << " ";
         cout << dec << endl;
 
-        // ubah ke vector<int> agar cocok dengan des_decrypt()
-        vector<int> cipherbits(buffer.begin(), buffer.end());
+        // Ambil data yang diterima (byte)
+        vector<uint8_t> receivedBytes(buffer.begin(), buffer.begin() + bytesReceived);
+
+        // Konversi byte → bit
+        vector<int> cipherbits = bytes_to_bits(receivedBytes);
+
+        // Baru decrypt
         string decrypted = des_decrypt(cipherbits, key);
         cout << "Setelah dekripsi: " << decrypted << endl;
     } else {
@@ -97,13 +111,15 @@ int main() {
     }
 
     // --- Kirim balasan terenkripsi ---
-    string reply = "Pesan diterima!";
+    string reply = "HI JUGAA";
     vector<int> encryptedReply = des_encrypt(reply, key);
+    vector<uint8_t> replyBytes = bits_to_bytes(encryptedReply);
+    cout << "Size:" << replyBytes.size() << endl;
 
     ssize_t sent = send(
         clientSocket,
-        reinterpret_cast<const char*>(encryptedReply.data()),
-        encryptedReply.size() * sizeof(int),  // total bytes
+        reinterpret_cast<const char*>(replyBytes.data()),
+        replyBytes.size(),  // total bytes
         0
     );
 
